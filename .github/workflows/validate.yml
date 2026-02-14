@@ -1,0 +1,61 @@
+name: Deploy GitOps Applications via OIDC
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Set up kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          version: 'latest'
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-action-role
+          aws-region: us-east-1
+
+      - name: Configure kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name nextime-cluster
+
+      - name: Apply Argo CD Applications
+        run: |
+          echo "Applying Argo CD Application manifests..."
+          kubectl apply -R -f argocd/
+
+      - name: Validate Application Pods
+        run: |
+          echo "Waiting for application pods to be ready..."
+          sleep 30
+          for app in ms-video ms-proccess-video; do
+            echo "Checking pods for $app..."
+            kubectl wait --for=condition=Ready pod -l app=$app -n default --timeout=120s || true
+            kubectl get pods -l app=$app -n default
+          done
